@@ -7,6 +7,7 @@ const MAX_PDF_BYTES = 5 * 1024 * 1024;
 const defaults = {
   news: [{ id: "n1", title: "Bienvenue sur le site du CVL", text: "Retrouvez ici les nouvelles du Conseil de la vie lycéenne, les projets qui prennent vie et les prochains rendez-vous.", date: new Date().toISOString().slice(0, 10), label: "La vie du CVL" }],
   meetings: [],
+  journals: [],
   projects: [{ id: "p1", title: "Les projets de cette année", text: "Les idées et projets du CVL seront présentés ici au fil de leur avancement. Vous avez une envie pour le lycée ? Partagez-la avec nous.", status: "En préparation" }],
   members: [],
   contacts: [{ id: "contact-email", category: "E-mail général", value: "À renseigner", url: "" }, { id: "contact-instagram", category: "Instagram", value: "À renseigner", url: "" }],
@@ -67,8 +68,9 @@ function cleanContent(input, existing) {
   if (!input || typeof input !== "object") throw new Error("Contenu invalide.");
   const out = {};
   const rules = {
-    news: ["title", "label", "text", "date"],
+    news: ["title", "label", "text", "date", "fileName", "fileType"],
     meetings: ["title", "date", "fileName"],
+    journals: ["title", "date", "fileName"],
     projects: ["title", "text", "status"],
     members: ["name", "className", "role", "contact"],
     contacts: ["category", "value", "url"],
@@ -95,27 +97,50 @@ export default async function handler(request) {
   const pdfId = url.searchParams.get("pdf");
 
   try {
-    if (request.method === "GET" && pdfId) {
-      if (!validId(pdfId)) return fail("Identifiant PDF invalide.", 400);
-      const pdf = await store.get(`pdf:${pdfId}`, { type: "arrayBuffer", consistency: "strong" });
-      if (!pdf) return fail("PDF introuvable.", 404);
-      return new Response(pdf, { headers: { "Content-Type": "application/pdf", "Content-Disposition": "inline", "Cache-Control": "public, max-age=60" } });
+    const fileId = url.searchParams.get("file");
+    if (request.method === "GET" && (pdfId || fileId)) {
+      const id = pdfId || fileId;
+      if (!validId(id)) return fail("Identifiant de fichier invalide.", 400);
+      const key = pdfId ? `pdf:${id}` : `file:${id}`;
+      const file = await store.get(key, { type: "arrayBuffer", consistency: "strong" });
+      if (!file) return fail("Fichier introuvable.", 404);
+      let contentType = "application/pdf";
+      if (fileId) {
+        const metaRaw = await store.get(`file-meta:${id}`, { type: "text", consistency: "strong" });
+        try { contentType = JSON.parse(metaRaw || "{}").contentType || "application/octet-stream"; } catch { contentType = "application/octet-stream"; }
+      }
+      return new Response(file, { headers: { "Content-Type": contentType, "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=60" } });
     }
 
-    if (request.method === "PUT" && pdfId) {
+    if (request.method === "PUT" && (pdfId || fileId)) {
       if (!isAdmin(request)) return fail("Connexion requise.", 401);
-      if (!validId(pdfId) || !(request.headers.get("content-type") || "").includes("application/pdf")) return fail("Fichier PDF invalide.", 415);
+      const id = pdfId || fileId;
+      const contentType = (request.headers.get("content-type") || "").split(";")[0].toLowerCase();
+      const accepted = pdfId ? contentType === "application/pdf" : ["application/pdf", "image/jpeg", "image/png", "image/webp", "image/gif"].includes(contentType);
+      if (!validId(id) || !accepted) return fail("Type de fichier invalide.", 415);
       const bytes = new Uint8Array(await request.arrayBuffer());
-      if (bytes.byteLength > MAX_PDF_BYTES) return fail("Le PDF dépasse la limite de 5 Mo.", 413);
-      if (bytes.length < 5 || new TextDecoder().decode(bytes.slice(0, 5)) !== "%PDF-") return fail("Le fichier n’est pas un PDF valide.", 415);
-      await store.set(`pdf:${pdfId}`, bytes);
+      if (bytes.byteLength > MAX_PDF_BYTES) return fail("Le fichier dépasse la limite de 5 Mo.", 413);
+      const signature = new TextDecoder().decode(bytes.slice(0, 12));
+      const validSignature = contentType === "application/pdf" ? signature.startsWith("%PDF-")
+        : contentType === "image/jpeg" ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+        : contentType === "image/png" ? bytes[0] === 0x89 && signature.slice(1, 4) === "PNG" && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+        : contentType === "image/gif" ? signature.startsWith("GIF87a") || signature.startsWith("GIF89a")
+        : contentType === "image/webp" ? signature.slice(0, 4) === "RIFF" && signature.slice(8, 12) === "WEBP" : false;
+      if (!validSignature) return fail("Le fichier ne semble pas valide.", 415);
+      if (pdfId) await store.set(`pdf:${id}`, bytes);
+      else {
+        await store.set(`file:${id}`, bytes);
+        await store.set(`file-meta:${id}`, JSON.stringify({ contentType }));
+      }
       return json({ ok: true });
     }
 
-    if (request.method === "DELETE" && pdfId) {
+    if (request.method === "DELETE" && (pdfId || fileId)) {
       if (!isAdmin(request)) return fail("Connexion requise.", 401);
-      if (!validId(pdfId)) return fail("Identifiant PDF invalide.", 400);
-      await store.delete(`pdf:${pdfId}`);
+      const id = pdfId || fileId;
+      if (!validId(id)) return fail("Identifiant de fichier invalide.", 400);
+      await store.delete(pdfId ? `pdf:${id}` : `file:${id}`);
+      if (fileId) await store.delete(`file-meta:${id}`);
       return json({ ok: true });
     }
 
