@@ -58,7 +58,7 @@
   async function persistOrReload(){try{await save();return true}catch(err){toast('Enregistrement impossible. Réessaie dans un instant.');if(serverMode){try{const result=await apiFetch('GET');if(result.content)data={...structuredClone(seed),...result.content};logged=!!result.authenticated}catch{}}return false}}
   async function initialize(){if(serverMode){try{const result=await apiFetch('GET');if(result.content)data={...structuredClone(seed),...result.content};logged=!!result.authenticated}catch{toast('Le stockage en ligne n’est pas encore configuré.')}}render()}
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const dateFmt=s=>{if(!s)return '';let d=new Date(s+'T12:00:00');return isNaN(d)?'':new Intl.DateTimeFormat('fr-FR',{day:'numeric',month:'long',year:'numeric'}).format(d)};
+  function linkifyUrls(value){return esc(value).replace(/https?:\/\/[^\s<>"']+/gi,url=>'<a href="'+url+'" target="_blank" rel="noopener noreferrer">'+url+'</a>')} const dateFmt=s=>{if(!s)return '';let d=new Date(s+'T12:00:00');return isNaN(d)?'':new Intl.DateTimeFormat('fr-FR',{day:'numeric',month:'long',year:'numeric'}).format(d)};
   const initials=s=>String(s||'CVL').split(/\s+/).slice(0,2).map(x=>x[0]||'').join('').toUpperCase();
   const empty=(title,desc)=>`<div class="empty"><b>${title}</b>${desc}</div>`;
   function render(){
